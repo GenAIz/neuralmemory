@@ -1,0 +1,33 @@
+{
+  "dataset": "logic",
+  # input size and target size
+  "input_dim": 11,
+  "target_dim": 11,
+  # eval on train size (first X of train)
+  "train_eval_truncate_size": -1,
+  # number of actions to retain for training the memory
+  "history": 32,
+  "settle": 8,
+  # name used to load action NN model
+  "action_model": "flatdann",
+  # training settings for action model (some of which are used for mem model)
+  "epochs": 72,
+  "batch_size": 16,
+  "eval_batch_size": 256,
+  "loss_function": "cross_entropy",
+  "action_optimizer": "adam",
+  "action_learning_rate": 0.0001,
+  "action_clipping": 0.01,
+  # name used to load mem NN model
+  "mem_model": "flatmnn",
+  # memory size
+  "memory_dim": 48,
+  # training settings for the mem model
+  "mem_train_iterations": 2,
+  "mem_optimizer": "rmsprop",
+  "mem_learning_rate": 0.00001,
+  "mem_clipping": 0.001,
+  "mem_num_samples": 8,
+  "mem_clamp": 10,
+  "gamma": 0.99
+}
