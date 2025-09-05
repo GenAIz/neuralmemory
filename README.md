@@ -7,6 +7,24 @@ The commands to setup the python environment are below.
 
 The python version is `3.11.10`.
 
+A virtual environment with an updated pytorch (versions frozen in `freeze_pt.txt`).  This virtual environment deprecates torchtext and the corresponding part-of-speech (POS) tagging experiment.  Upgrading to this version was necessary to resolve a tensor slicing bug within older versions of pytorch.
+```commandline
+python3.11 -m venv venv_pt
+source venv_pt/bin/activate
+pip3 install --upgrade pip==25.0.1
+pip3 install numpy==2.2.4
+pip3 install torch==2.6.0
+pip3 install scikit-learn==1.6.1
+pip3 install PyYAML
+pip install 'portalocker>=2.0.0'
+```
+
+From the root of this repository set the (bash) shell variables `export PYTHONPATH=$PWD/src` and `export NM_DATA_DIR=$PWD/data`.
+
+### Deprecated virtual environment 
+Previously used, or old, virtual environments are below.  These are documented for reproducibility.
+
+The original and deprecated virtual environment used to produce initial results (versions frozen in `freeze.txt`).
 ```commandline
 python3.11 -m venv venv
 source venv/bin/activate
@@ -18,45 +36,18 @@ pip install PyYAML
 pip install bpemb
 ```
 
-Pip freeze gives the following:
-```
-bpemb==0.3.6
-certifi==2023.11.17
-charset-normalizer==3.3.2
-filelock==3.13.1
-fsspec==2023.12.2
-gensim==4.3.3
-idna==3.6
-Jinja2==3.1.2
-joblib==1.3.2
-MarkupSafe==2.1.3
-mpmath==1.3.0
-networkx==3.2.1
-numpy==1.26.3
-pillow==10.2.0
-portalocker==2.8.2
-PyYAML==6.0.1
-requests==2.31.0
-scikit-learn==1.3.2
-scipy==1.11.4
-sentencepiece==0.2.0
-smart-open==7.0.5
-sympy==1.12
-threadpoolctl==3.2.0
-torch==2.1.2
-torchaudio==2.1.2
-torchdata==0.7.1
-torchtext==0.16.2
-torchvision==0.16.2
-tqdm==4.66.1
-typing_extensions==4.9.0
-urllib3==2.1.0
-wrapt==1.16.0
+A virtual environment with an updated torchtext and corresponding pytorch for POS tagging experiments.
+```commandline
+python3.11 -m venv venv_tt
+source venv_nt/bin/activate
+pip3 install --upgrade pip==23.3.2
+pip3 install numpy==1.26.3
+pip3 install torch==2.2.0 torchtext==0.17.0
+pip3 install scikit-learn==1.3.2
+pip3 install PyYAML
+pip install 'portalocker>=2.0.0'
 ```
 
-From the root of this repository `export PYTHONPATH=$PWD/src`.
-
-From the root of this repository `export NM_DATA_DIR=$PWD/data`
 
 # Unit tests
 There is a __minimal__ set of unit tests.  These can validate that that python environment is likely set up correctly.

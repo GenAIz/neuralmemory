@@ -24,7 +24,7 @@ from nm import wmt2014data
 # NOTE: this evaluation will differ slightly from predict.py because there are a different number of sequence
 # separating characters due to batch size differences.
 def evaluate(config: dict, dataset: seqdata.SequenceBatch, action_model: nn.Module,
-             use_memory: bool, mem_model: nn.Module) -> tuple[float, float, float]:
+             use_memory: bool, mem_model: nn.Module) -> tuple[float, float, float, float, float, float]:
     """
     Evaluate a model on a given data set.
 
@@ -33,7 +33,7 @@ def evaluate(config: dict, dataset: seqdata.SequenceBatch, action_model: nn.Modu
     :param action_model:  the action model
     :param use_memory:  true, if the memory should be used during evaluation
     :param mem_model:  the memory model
-    :return:  precision, recall and F1
+    :return:  micro and weighted precision, recall and F1
     """
     # assumes the model is on the right device
     dataset.restart(config["eval_batch_size"], allow_batch_size_of_one=True)
@@ -58,10 +58,10 @@ def evaluate(config: dict, dataset: seqdata.SequenceBatch, action_model: nn.Modu
             inputs = history.current().inputs()
             memories = history.current().memories()
             actions = action_model(inputs, memories)
-            history.current().update_actions(actions.clone().detach())
+            history.current().update_actions(actions)
 
             all_targets.extend(map(int, history.current().targets().argmax(1)))
-            all_predictions.extend(map(int, actions.argmax(1)))
+            all_predictions.extend(map(int, history.current().actions().argmax(1)))
 
             if use_memory:
                 history.add(
@@ -70,11 +70,15 @@ def evaluate(config: dict, dataset: seqdata.SequenceBatch, action_model: nn.Modu
                                      None, device=config["device"])
                 )
                 history.current().subset = history.past(1).subset
-                next_memories = mem_model(inputs, actions.clone().detach(), memories)
+                next_memories = mem_model(
+                    history.past(1).inputs(), history.past(1).actions(), history.past(1).memories()
+                )
                 history.current().update_memories(next_memories)
 
-    p, r, f1, _ = precision_recall_fscore_support(all_targets, all_predictions, average='weighted', zero_division=0)
-    return p, r, f1
+    # TODO: make same changes to predict
+    mp, mr, mf1, _ = precision_recall_fscore_support(all_targets, all_predictions, average='micro', zero_division=0)
+    wp, wr, wf1, _ = precision_recall_fscore_support(all_targets, all_predictions, average='weighted', zero_division=0)
+    return mp, mr, mf1, wp, wr, wf1
 
 
 class Trainer:
@@ -100,8 +104,11 @@ class Trainer:
         action_model = self.action_model.to(config["device"])
         mem_model = self.mem_model.to(config["device"])
         action_loss_fn, mem_loss_fn = self.setup_loss(config)
-        action_optimizer = self.setup_action_optimizer(config, action_model)
+        action_optimizer, action_lr_scheduler = self.setup_action_optimizer(config, action_model)
         mem_optimizer, mem_lr_scheduler = self.setup_memory_optimizer(config, mem_model)
+        num_action_params = self.log_number_of_model_parameters("action", action_model)
+        num_mem_params = self.log_number_of_model_parameters("memory", mem_model)
+        logging.info("Total model parameters %i", num_action_params + num_mem_params)
         # prepare the experience replay history
         history = state.StateHistory(config["history"])
         history.reset()
@@ -137,13 +144,10 @@ class Trainer:
                 if batch is None:
                     break
                 utils.update_batch_history(config, batch, history)
-                inputs = history.current().inputs().clone()
-                memories = history.current().memories().clone()
                 # apply the action model and retain output for training memory, and train action model
-                actions = action_model(inputs, memories)
-                history.current().update_actions(actions.clone().detach())
-                targets = history.current().targets()
-                action_losses = action_loss_fn(actions, targets)
+                actions = action_model(history.current().inputs(), history.current().memories())
+                history.current().update_actions(actions)
+                action_losses = action_loss_fn(actions, history.current().targets())
                 action_losses = action_losses.reshape((action_losses.size(0), 1))
                 history.current().update_action_losses(action_losses)
                 if history.current().subset is not None:
@@ -175,20 +179,38 @@ class Trainer:
                 if history.size > 1:
                     history.current().subset = history.past(1).subset
                     mem_model.eval()
-                    next_memories = mem_model(inputs, actions, memories)
-                    history.current().update_memories(next_memories.clone().detach())
+                    next_memories = mem_model(
+                        history.past(1).inputs(), history.past(1).actions(),history.past(1).memories()
+                    )
+                    history.current().update_memories(next_memories)
 
                 num_batches += 1
 
+            if action_lr_scheduler is not None:
+                old_rate = action_lr_scheduler.get_last_lr()[0]
+                action_lr_scheduler.step()
+                new_rate = action_lr_scheduler.get_last_lr()[0]
+                if old_rate != new_rate:
+                    logging.info("Action learning rate set to: %f", new_rate)
             if mem_lr_scheduler is not None:
+                old_rate = mem_lr_scheduler.get_last_lr()[0]
                 mem_lr_scheduler.step()
-                logging.info("Learning rate set to: %f", mem_lr_scheduler.get_last_lr()[0])
+                new_rate = mem_lr_scheduler.get_last_lr()[0]
+                if old_rate != new_rate:
+                    logging.info("Memory learning rate set to: %f", new_rate)
+
+            if "eval_interval" in config and epoch % config["eval_interval"] != 0:
+                continue
 
             logging.info("evaluating...")
-            tp, tr, tf1 = evaluate(config, self.train_eval_data, action_model, history.size > 1, mem_model)
-            smooth_train_f1.append(tf1)
-            vp, vr, vf1 = evaluate(config, self.validation_data, action_model, history.size > 1, mem_model)
-            smooth_validation_f1.append(vf1)
+            tmp, tmr, tmf1, twp, twr, twf1 = evaluate(
+                config, self.train_eval_data, action_model, history.size > 1, mem_model
+            )
+            smooth_train_f1.append(twf1)
+            vmp, vmr, vmf1, vwp, vwr, vwf1 = evaluate(
+                config, self.validation_data, action_model, history.size > 1, mem_model
+            )
+            smooth_validation_f1.append(vwf1)
             if len(smooth_train_f1) > smooth_f1_window_size:
                 smooth_train_f1.pop(0)
                 smooth_validation_f1.pop(0)
@@ -199,19 +221,19 @@ class Trainer:
                 epoch_memory_loss / num_epoch_memory_trainings if num_epoch_memory_trainings > 0 else -1
             )
             logging.info(
-                "eval on train: p %f  r %f  f1 %f  smooth-f1 %f",
-                tp, tr, tf1, np.mean(smooth_train_f1)
+                "eval on train: micro p %f  r %f  f1 %f  weighted p %f  r %f  f1 %f  smooth-weighted-f1 %f",
+                tmp, tmr, tmf1, twp, twr, twf1, np.mean(smooth_train_f1)
             )
             logging.info(
-                "eval on validation: p %f  r %f  f1 %f  smooth-f1 %f",
-                vp, vr, vf1, np.mean(smooth_validation_f1)
+                "eval on validation: micro p %f  r %f  f1 %f  weighted p %f  r %f  f1 %f  smooth-weighted-f1 %f",
+                vmp, vmr, vmf1, vwp, vwr, vwf1, np.mean(smooth_validation_f1)
             )
             save_type = ""
-            if vf1 > validation_f1:
-                validation_f1 = vf1
+            if vwf1 > validation_f1:
+                validation_f1 = vwf1
                 save_type = "v"
-            if tf1 > train_f1:
-                train_f1 = tf1
+            if twf1 > train_f1:
+                train_f1 = twf1
                 save_type = "t"
             if not save_type and "save_point" in config and epoch % config["save_point"] == 0:
                 save_type = "sp"
@@ -252,13 +274,19 @@ class Trainer:
 
         for past, f_past in pairs:
             subset = history.past(f_past).subset
-            inputs.append(history.past(past).inputs().clone().detach()[subset, :].squeeze())
-            actions.append(history.past(past).actions().clone().detach()[subset, :].squeeze())
-            memories.append(history.past(past).memories().clone().detach()[subset, :].squeeze())
-            next_inputs.append(history.past(f_past).inputs().clone().detach())
-            next_actions.append(history.past(f_past).actions().clone().detach())
-            next_memories.append(history.past(f_past).memories().clone().detach())
-            action_losses.append(history.past(f_past).action_losses().clone().detach())
+            inputs.append(history.past(past).inputs(override=subset).squeeze())
+            if "mem_train_with_targets" in config and config["mem_train_with_targets"]:
+                actions.append(history.past(past).targets(override=subset).squeeze())
+            else:
+                actions.append(history.past(past).actions(override=subset).squeeze())
+            memories.append(history.past(past).memories(override=subset).squeeze())
+            next_inputs.append(history.past(f_past).inputs())
+            if "mem_train_with_targets" in config and config["mem_train_with_targets"]:
+                next_actions.append(history.past(f_past).targets())
+            else:
+                next_actions.append(history.past(f_past).actions())
+            next_memories.append(history.past(f_past).memories())
+            action_losses.append(history.past(f_past).action_losses())
 
         inputs = torch.cat(inputs)
         actions = torch.cat(actions)
@@ -267,29 +295,29 @@ class Trainer:
         next_actions = torch.cat(next_actions)
         next_memories = torch.cat(next_memories)
         action_losses = torch.cat(action_losses)
+
+        policy_memories = mem_model(next_inputs, next_actions, next_memories)
+        if "mem_l1" in config:
+            # apply a notion of sparsity to the memory reward
+            action_losses += config["mem_l1"] * torch.mean(torch.abs(policy_memories.clone().detach()))
+        if "mem_dampen_losses" in config and config["mem_dampen_losses"] > 0:
+            # keep numbers from getting ridiculous in a smoother manner than clamping
+            action_losses = config["mem_dampen_losses"] * torch.log(1 + action_losses)
         if "mem_clamp" in config and config["mem_clamp"] > 0:
             # keep numbers from getting ridiculous
             action_losses = torch.clamp(action_losses, min=0, max=config["mem_clamp"])
+        expected_memories = config["mem_gamma"] * policy_memories - action_losses
 
-        policy_memories = mem_model(next_inputs, next_actions, next_memories)
-        expected_memories = config["gamma"] * policy_memories - action_losses
         actual_memories = mem_model(inputs, actions, memories)
-        if torch.any(torch.isnan(actual_memories)):
-            # some annoying numerical instability :(
-            logging.warning("Memory model produced (actual) memories with a NaN.")
-            is_input = False
-            if torch.any(torch.isnan(inputs)):
-                is_input = True
-                logging.warning("NaN discovered in mem model inputs.")
-            if torch.any(torch.isnan(actions)):
-                is_input = True
-                logging.warning("NaN discovered in mem model actions.")
-            if torch.any(torch.isnan(memories)):
-                is_input = True
-                logging.warning("NaN discovered in mem model memories.")
-            if not is_input:
-                logging.warning("No model inputs have NaN.")
-            sys.exit(1)
+        if torch.any(torch.isinf(actual_memories)) or torch.any(torch.isnan(actual_memories)):
+            logging.warning("Memory model produced Infs or NaN when calculating actual memories.")
+            Trainer.log_nan("inputs", inputs)
+            Trainer.log_nan("actions", actions)
+            Trainer.log_nan("mem_in", memories)
+            Trainer.log_nan("mem_out", actual_memories)
+            logging.info("Dimensions %s %s %s", inputs.shape, actions.shape, memories.shape)
+            raise ValueError("Memory model produced Infs or NaN")
+
         mem_loss = mem_loss_fn(actual_memories, expected_memories)
         mem_optimizer.zero_grad()
         mem_loss.backward()
@@ -298,7 +326,35 @@ class Trainer:
         mem_optimizer.step()
         return mem_loss.item()
 
-    def setup_loss(self, config: dict) -> tuple:
+    @staticmethod
+    def log_nan(tensor_name: str, t: torch.tensor) -> None:
+        max_ = torch.max(t)
+        min_ = torch.min(t)
+        near_zero = None
+        near_zero_abs = None
+        has_zeroes = False
+        for val in torch.flatten(t).tolist():
+            if val == 0:
+                has_zeroes = True
+            elif near_zero_abs is None or abs(val) < near_zero_abs:
+                near_zero_abs = abs(val)
+                near_zero = val
+        logging.warning(
+            "Tensor '{}' values: max {} min {} has_zeroes {} near zero {}".format(
+                tensor_name, max_, min_, has_zeroes, near_zero
+            )
+        )
+
+    @staticmethod
+    def log_number_of_model_parameters(name: str, model: nn.Module) -> int:
+        total = 0
+        for p in model.parameters():
+            total += torch.numel(p)
+        logging.info("Model '{}' has {} parameters".format(name, total))
+        return total
+
+    @staticmethod
+    def setup_loss(config: dict) -> tuple:
         """Convert the training configuration to actual loss functions."""
         if config["loss_function"] == "cross_entropy":
             action_loss_fn = nn.CrossEntropyLoss(reduction="none")
@@ -306,7 +362,8 @@ class Trainer:
             raise ValueError("Unknown action loss function {}".format(config["loss_function"]))
         return action_loss_fn, torch.nn.SmoothL1Loss()
 
-    def setup_action_optimizer(self, config: dict, action_model: nn.Module):
+    @staticmethod
+    def setup_action_optimizer(config: dict, action_model: nn.Module):
         """Convert the training configuration to an optimizer, for the action network."""
         if config["action_optimizer"] == "adam":
             action_optimizer = torch.optim.Adam(
@@ -320,9 +377,20 @@ class Trainer:
             )
         else:
             raise ValueError("Unknown action optimizer {}".format(config["optimizer"]))
-        return action_optimizer
+        action_lr_scheduler = None
+        if "action_lr_rate_decay" in config:
+            milestones = config["action_lr_rate_decay"][0]
+            if isinstance(milestones, int):
+                milestones = [milestones]
+            assert milestones[0] >= 1
+            action_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                action_optimizer, milestones=milestones, gamma=config["action_lr_rate_decay"][1]
+            )
+            logging.info("Action learning rate will decay %s", config["action_lr_rate_decay"])
+        return action_optimizer, action_lr_scheduler
 
-    def setup_memory_optimizer(self, config: dict, mem_model: nn.Module) -> tuple:
+    @staticmethod
+    def setup_memory_optimizer(config: dict, mem_model: nn.Module) -> tuple:
         """Convert the training configuration to an optimizer, for the memory network."""
         if config["mem_optimizer"] == "adam":
             mem_optimizer = torch.optim.Adam(
@@ -343,16 +411,24 @@ class Trainer:
             raise ValueError("Unknown mem optimizer {}".format(config["optimizer"]))
         mem_lr_scheduler = None
         if "mem_lr_rate_decay" in config:
-            assert config["mem_lr_rate_decay"][0] >= 1
+            milestones = config["mem_lr_rate_decay"][0]
+            if isinstance(milestones, int):
+                milestones = [milestones]
+            assert milestones[0] >= 1
             mem_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
-                mem_optimizer, milestones=[config["mem_lr_rate_decay"][0]], gamma=config["mem_lr_rate_decay"][1]
+                mem_optimizer, milestones=milestones, gamma=config["mem_lr_rate_decay"][1]
             )
-            logging.info("Learning rate will decay")
+            logging.info("Memory learning rate will decay %s", config["mem_lr_rate_decay"])
         return mem_optimizer, mem_lr_scheduler
 
 
 def run_experiment(config: dict) -> None:
     """Construct an experiment given the training configuration and start the experiment."""
+    if "dampen_losses" in config:
+        raise ValueError("config key 'dampen_losses' is deprecated.  use 'mem_dampen_losses' instead.")
+    if "gamma" in config:
+        raise ValueError("config key 'gamma' is deprecated.  use 'mem_gamma' instead.")
+
     # to make the experiments more reproducible
     random.seed(13)
     np.random.seed(13)
@@ -443,7 +519,8 @@ def run_experiment(config: dict) -> None:
         action_model = action_nn.FlatDANN(
             config["input_dim"],
             config["memory_dim"],
-            config["target_dim"]
+            config["target_dim"],
+            use_swish=("use_swish" in config and config["use_swish"])
         )
     elif config["action_model"] == "flat2dann":
         action_model = action_nn.Flat2DANN(
@@ -458,34 +535,66 @@ def run_experiment(config: dict) -> None:
             config["target_dim"],
             config["action_embedding_dim"]
         )
+    elif config["action_model"] == "parallelActionNet":
+        action_model = action_nn.ManyActionNN(
+            config["input_dim"],
+            config["action_embedding_dim"],
+            config["memory_dim"],
+            config["action_chunk_dim"],
+            config["target_dim"],
+            activation_fn_is_tanh=("action_fn_is_tanh" in config and config["action_fn_is_tanh"]),
+            emb_activation_fn_is_tanh=("action_emb_fn_is_tanh" in config and config["action_emb_fn_is_tanh"])
+        )
+        logging.info("Action layer chunk dimension %i", action_model.chunk_dim)
+        logging.info("Action layer properties %s", action_model.layer_properties)
     else:
         raise ValueError("Unknown action model {}".format(config["model"]))
 
     if config["mem_model"] == "flatmnn":
         mem_model = mem_nn.MemoryNN(
             config["input_dim"],
-            config["target_dim"],
-            config["memory_dim"]
+            config["memory_dim"],
+            target_dim=config["target_dim"]
         )
-    elif config["mem_model"] == "flat2mnn":
-        mem_model = mem_nn.Memory2NN(
+    elif config["mem_model"] == "flatmnnNA":
+        mem_model = mem_nn.MemoryNN(
             config["input_dim"],
-            config["target_dim"],
-            config["memory_dim"]
-        )
-    elif config["mem_model"] == "flat3mnn":
-        mem_model = mem_nn.Memory3NN(
-            config["input_dim"],
-            config["target_dim"],
             config["memory_dim"]
         )
     elif config["mem_model"] == "embmnn":
-        mem_model = mem_nn.MemEmbMNN(
+        mem_model = mem_nn.MemoryNN(
             config["input_dim"],
-            config["target_dim"],
             config["memory_dim"],
-            config["mem_embedding_dim"]
+            input_embedding_dim=config["mem_embedding_dim"],
+            target_dim=config["target_dim"]
         )
+    elif config["mem_model"] == "embmnnNA":
+        mem_model = mem_nn.MemoryNN(
+            config["input_dim"],
+            config["memory_dim"],
+            input_embedding_dim=config["mem_embedding_dim"]
+        )
+    elif config["mem_model"] == "embWLmnnNA":
+        mem_model = mem_nn.MemoryNN(
+            config["input_dim"],
+            config["memory_dim"],
+            input_embedding_dim=config["mem_embedding_dim"],
+            intermediate_layers=config["mem_num_intermediate_layers"],
+            intermediate_dim=config["mem_intermediate_dim"]
+        )
+    elif config["mem_model"] == "parallelMemNetNA":
+        mem_model = mem_nn.ManyMemoryNN(
+            config["mem_num_mem_net"],
+            config["input_dim"],
+            config["memory_dim"],
+            input_embedding_dim=config["mem_embedding_dim"],
+            intermediate_layers=config["mem_num_intermediate_layers"],
+            intermediate_dim=config["mem_intermediate_dim"],
+            funnel_to_zero_chunk=("mem_funnel_to_zero_chunk" in config and config["mem_funnel_to_zero_chunk"]),
+            activation_fn_is_tanh=("mem_fn_is_tanh" in config and config["mem_fn_is_tanh"]),
+            emb_activation_fn_is_tanh=("mem_emb_fn_is_tanh" in config and config["mem_emb_fn_is_tanh"])
+        )
+        logging.info("Memory layer chunk dimension %i", mem_model.memory_chunk_dim)
     else:
         raise ValueError("Unknown action model {}".format(config["model"]))
 

@@ -6,6 +6,8 @@ import torch
 from nm import state
 
 
+# TODO: test override
+
 class TestEtc(unittest.TestCase):
 
     def test_zeros(self):
@@ -78,7 +80,9 @@ class TestBatchState(unittest.TestCase):
         batch = state.BatchState(
             7, 2, np.int8, 3, np.int16, 4, np.int32, [1, 2, 6]
         )
-        batch.update_inputs(np.ones((3, 2), np.int8))
+        data = np.ones((3, 2), np.int8)
+        batch.update_inputs(data)
+        data[:, :] = -20
         self.assertEqual(np.sum(batch.states[0].input), 0)
         self.assertNotEqual(np.sum(batch.states[1].input), 0)
         self.assertNotEqual(np.sum(batch.states[2].input), 0)
@@ -98,6 +102,11 @@ class TestBatchState(unittest.TestCase):
         batch.update_inputs(x)
         times = batch.inputs()
         self.assertTrue(np.all(times == x))
+        y = batch.inputs()
+        y[:, :] = -1
+        times = batch.inputs()
+        self.assertTrue(np.all(times == x))
+
 
     def test_reconstruct_subset(self):
         batch = state.BatchState(

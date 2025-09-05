@@ -6,17 +6,18 @@
   "target_dim": 171,
   # eval on train size (first X of train)
   "train_eval_truncate_size": 500,
+  "eval_interval": 50,
   "wmt_train_truncate_size": 5000,
-  "wmt_validation_truncate_size": 50,
-  "wmt_curriculum": [1000, 500],
+  "wmt_validation_truncate_size": 100,
+  "wmt_curriculum": [2000, 500],
   "wmt_add_chars_to_curriculum": true,
   # number of actions to retain for training the memory
-  "history": 10,
-  "settle": 6,
+  "history": 17,
+  "settle": 3,
   # name used to load action NN model
   "action_model": "embdann",
   # training settings for action model (some of which are used for mem model)
-  "epochs": 12000,
+  "epochs": 2048,
   "batch_size": 16,
   "eval_batch_size": 256,
   "loss_function": "cross_entropy",
@@ -25,7 +26,7 @@
   "action_clipping": 0.01,
   "action_embedding_dim": 96,
   # name used to load mem NN model
-  "mem_model": "embmnn",
+  "mem_model": "embmnnNA",
   "mem_embedding_dim": 96,
   # memory size
   "memory_dim": 1024,
@@ -34,7 +35,7 @@
   "mem_optimizer": "rmsprop",
   "mem_learning_rate": 0.0000001,
   "mem_clipping": 0.001,
-  "mem_num_samples": 8,
-  "mem_clamp": 10,
-  "gamma": 0.99
+  "mem_num_samples": 16,
+  "gamma": 0.99,
+  "dampen_losses": 8
 }

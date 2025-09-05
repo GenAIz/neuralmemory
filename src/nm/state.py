@@ -36,7 +36,7 @@ def _copy(x: np.ndarray | torch.Tensor) -> np.ndarray | torch.Tensor:
     :return: a copy of the tensor
     """
     if isinstance(x, torch.Tensor):
-        return x.clone().detach()
+        return x.detach().clone()
     else:
         return np.copy(x)
 
@@ -120,7 +120,8 @@ class BatchState:
         self.subset: list[int] | np.ndarray | torch.Tensor | None = subset
 
     def _update(self, update_fn, x: np.ndarray | torch.Tensor,
-                override: list[int] | np.ndarray | torch.Tensor | None = None) -> None:
+                override: list[int] | np.ndarray | torch.Tensor | None = None,
+                clone: bool = True) -> None:
         """
         Update the state by applying the update function update_fn to the
         tensors.  Updating o subset of states is possible by providing the
@@ -129,36 +130,41 @@ class BatchState:
         :param update_fn:  update function
         :param x:  the new value(s)
         :param override:  the subset to update, or None which implies update all
+        :param clone:  return a clone/copy of the tensor
         """
         subset = self.subset if override is None else override
         size = len(self.states) if subset is None else _dim0(subset)
         for i in range(size):
             if self.subset is None:
-                update_fn(self.states[i], x[i, :])
+                update_fn(self.states[i], _copy(x[i, :]) if clone else x[i, :])
             else:
-                update_fn(self.states[subset[i]], x[i, :])
+                update_fn(self.states[subset[i]], _copy(x[i, :]) if clone else x[i, :])
 
-    def update_inputs(self, inputs: np.ndarray | torch.Tensor) -> None:
+    def update_inputs(self, inputs: np.ndarray | torch.Tensor, clone: bool = True) -> None:
         def update(state: State, input: np.ndarray | torch.Tensor):
             state.input = input
-        self._update(update, inputs)
 
-    def update_memories(self, memories: np.ndarray | torch.Tensor) -> None:
+        self._update(update, inputs, clone=clone)
+
+    def update_memories(self, memories: np.ndarray | torch.Tensor, clone: bool = True) -> None:
         def update(state: State, memory: np.ndarray | torch.Tensor):
             state.memory = memory
-        self._update(update, memories)
 
-    def update_actions(self, actions: np.ndarray | torch.Tensor) -> None:
+        self._update(update, memories, clone=clone)
+
+    def update_actions(self, actions: np.ndarray | torch.Tensor, clone: bool = True) -> None:
         def update(state: State, action: np.ndarray | torch.Tensor):
             state.action = action
-        self._update(update, actions)
 
-    def update_targets(self, targets: np.ndarray | torch.Tensor) -> None:
+        self._update(update, actions, clone=clone)
+
+    def update_targets(self, targets: np.ndarray | torch.Tensor, clone: bool = True) -> None:
         def update(state: State, target: np.ndarray | torch.Tensor):
             state.target = target
-        self._update(update, targets)
 
-    def update_action_losses(self, action_losses: np.ndarray | torch.Tensor) -> None:
+        self._update(update, targets, clone=clone)
+
+    def update_action_losses(self, action_losses: np.ndarray | torch.Tensor, clone: bool = True) -> None:
         def update(state: State, action_loss: np.ndarray | torch.Tensor):
             if isinstance(action_loss, torch.Tensor):
                 if action_loss.size() == (1,):
@@ -174,7 +180,8 @@ class BatchState:
                     state.action_loss = action_loss[0, 0]
                 else:
                     raise ValueError("Unexpected action loss shape {}".format(action_loss.shape))
-        self._update(update, action_losses)
+
+        self._update(update, action_losses, clone=clone)
 
     def _reconstruct(self, get_fn,
                      override: list[int] | np.ndarray | torch.Tensor | None = None) -> np.ndarray | torch.Tensor:
@@ -183,7 +190,8 @@ class BatchState:
 
         :param get_fn:  the function that retrieves the "sub" tensors
         :param override:  the subset to fetch, or None which implies fetch all
-        :return:  a tensor that contains all "sub" tensors
+        :param clone:  return a clone/copy of the tensor
+        :return:  a new tensor that contains all "sub" tensors
         """
         subset = self.subset if override is None else override
         size = len(self.states) if subset is None else _dim0(subset)
@@ -197,30 +205,35 @@ class BatchState:
                 x[i, :] = get_fn(self.states[subset[i]])
         return x
 
-    def inputs(self) -> np.ndarray | torch.Tensor:
-        def get(state: State):
+    def inputs(self, override: list[int] | np.ndarray | torch.Tensor | None = None) -> np.ndarray | torch.Tensor:
+        def get_inputs(state: State):
             return state.input
-        return self._reconstruct(get)
 
-    def memories(self) -> np.ndarray | torch.Tensor:
-        def get(state: State):
+        return self._reconstruct(get_inputs, override=override)
+
+    def memories(self, override: list[int] | np.ndarray | torch.Tensor | None = None) -> np.ndarray | torch.Tensor:
+        def get_memories(state: State):
             return state.memory
-        return self._reconstruct(get)
 
-    def actions(self) -> np.ndarray | torch.Tensor:
-        def get(state: State):
+        return self._reconstruct(get_memories, override=override)
+
+    def actions(self, override: list[int] | np.ndarray | torch.Tensor | None = None) -> np.ndarray | torch.Tensor:
+        def get_actions(state: State):
             return state.action
-        return self._reconstruct(get)
 
-    def targets(self) -> np.ndarray | torch.Tensor:
-        def get(state: State):
+        return self._reconstruct(get_actions, override=override)
+
+    def targets(self, override: list[int] | np.ndarray | torch.Tensor | None = None) -> np.ndarray | torch.Tensor:
+        def get_targets(state: State):
             return state.target
-        return self._reconstruct(get)
+
+        return self._reconstruct(get_targets, override=override)
 
     def action_losses(self, override: list[int] | np.ndarray | torch.Tensor | None = None) -> np.ndarray | torch.Tensor:
-        def get(state: State):
+        def get_losses(state: State):
             return state.action_loss
-        return self._reconstruct(get, override=override)
+
+        return self._reconstruct(get_losses, override=override)
 
 
 class StateHistory:

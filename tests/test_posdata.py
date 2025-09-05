@@ -6,6 +6,9 @@ from nm import posdata
 class TestPOSData(unittest.TestCase):
 
     def test_posdata(self):
+        if posdata.UDPOS_DATASETS is None:
+            # assume torchtext isn't available and skip tests
+            return
         vecs = posdata.udpos_one_hot_vectors()
         words = None
         tags = None

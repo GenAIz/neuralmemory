@@ -5,48 +5,37 @@
   "input_dim": 171,
   "target_dim": 171,
   # eval on train size (first X of train)
-  "train_eval_truncate_size": 5000,
-  "eval_interval": 5,
+  "train_eval_truncate_size": 500,
+  "eval_interval": 50,
   "wmt_train_truncate_size": 5000,
   "wmt_validation_truncate_size": 100,
-  "wmt_curriculum": [2100, 5000],
+  "wmt_curriculum": [2000, 500],
   "wmt_add_chars_to_curriculum": true,
   # number of actions to retain for training the memory
   "history": 17,
   "settle": 3,
   # name used to load action NN model
-  "action_model": "parallelActionNet",
+  "action_model": "embdann",
   # training settings for action model (some of which are used for mem model)
-  "epochs": 2081,
+  "epochs": 2048,
   "batch_size": 16,
   "eval_batch_size": 256,
   "loss_function": "cross_entropy",
   "action_optimizer": "adam",
-  "action_learning_rate": 0.000001,
+  "action_learning_rate": 0.00001,
   "action_clipping": 0.01,
   "action_embedding_dim": 96,
-  "action_fn_is_tanh": true,
-  "action_emb_fn_is_tanh": true,
-  "action_chunk_dim": 1024,
   # name used to load mem NN model
-  "mem_model": "parallelMemNetNA",
-  "mem_num_mem_net": 16,
+  "mem_model": "embmnnNA",
   "mem_embedding_dim": 96,
-  "mem_fn_is_tanh": true,
-  "mem_emb_fn_is_tanh": true,
-  "mem_num_intermediate_layers": 0,
-  "mem_intermediate_dim": 0,
   # memory size
-  "memory_dim": 16384,
+  "memory_dim": 1024,
   # training settings for the mem model
   "mem_train_iterations": 1,
   "mem_optimizer": "rmsprop",
-  "mem_learning_rate": 0.00000001,
+  "mem_learning_rate": 0.0000001,
   "mem_clipping": 0.001,
   "mem_num_samples": 16,
   "mem_gamma": 0.99,
-  "mem_dampen_losses": 8,
-  "mem_l1": 2.0,
-  "mem_funnel_to_zero_chunk": true,
-  "note": "does the bug fix changes things?"
+  "mem_dampen_losses": 8
 }

@@ -1,18 +1,29 @@
 import random
 from collections import OrderedDict
 
-from torchtext.datasets import UDPOS
-from torchtext.vocab import GloVe
 import numpy as np
 
 from nm import seqdata
 
 
-UDPOS_DATASETS = UDPOS()
+UDPOS_DATASETS = None
+GLOVE_840B_300 = None
+
+
+try:
+    from torchtext.datasets import UDPOS
+    from torchtext.vocab import GloVe
+    UDPOS_DATASETS = UDPOS()
+    GLOVE_840B_300 = GloVe()
+except ModuleNotFoundError:
+    print("** The torchtext module is not available. Warning: POS experiments will not work.")
 
 
 def create_tag_dictionary():
     """Create the dictionary of POS tags for use such as 1-hot encoding."""
+    if UDPOS_DATASETS is None:
+        # assume that the torchtext module is not available
+        return None, None
     udpos_tags = OrderedDict()
     for dataset in UDPOS_DATASETS:
         for words, _, tags in dataset:
@@ -37,9 +48,6 @@ def udpos_one_hot_vectors() -> np.ndarray:
     for i in range(vectors.shape[0]):
         vectors[i, i] = 1
     return vectors
-
-
-GLOVE_840B_300 = GloVe()
 
 
 class UDPOSSeq(seqdata.Sequence):
